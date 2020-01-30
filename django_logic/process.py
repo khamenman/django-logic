@@ -51,39 +51,56 @@ class Process(object):
     def __getattr__(self, item):
         return partial(self._get_transition_method, item)
 
+    def get_available_action_names(self):
+        """
+        Returns a list of action names of all declared transitions, including from subprocesses
+        """
+        return [t.action_name for t in set(self.get_available_transitions(check_valid=False))]
+
     def _get_transition_method(self, action_name: str, **kwargs):
         """
         It returns a callable transition method by provided action name.
         """
         user = kwargs.pop('user') if 'user' in kwargs else None
-        transitions = list(self.get_available_transitions(action_name=action_name, user=user))
-
-        if len(transitions) == 1:
-            transition = transitions[0]
-            logger.info(f"{self.state.instance_key}, process {self.process_name} "
-                        f"executes '{action_name}' transition from {self.state.cached_state} "
-                        f"to {transition.target}")
-            return transition.change_state(self.state, **kwargs)
-
-        elif len(transitions) > 1:
+        # First, see if there are transitions with given name and passing conditions/permissions
+        transitions = list(self.get_available_transitions(action_name=action_name, user=user, check_valid=True, raise_exception=False))
+        # If there is ambiguity, raise an error
+        if len(transitions) > 1:
             logger.info(f"Runtime error: {self.state.instance_key} has several "
                          f"transitions with action name '{action_name}'. "
                          f"Make sure to specify conditions and permissions accordingly to fix such case")
             raise TransitionNotAllowed("There are several transitions available")
-        raise TransitionNotAllowed(f"Process class {self.__class__} has no transition with action name {action_name}")
 
-    def is_valid(self, user=None) -> bool:
+        # If there are no such transition, then...
+        if len(transitions) == 0:
+            # This will raise an error if some condition or permission is failed...
+            list(self.get_available_transitions(action_name=action_name, user=user, check_valid=True, raise_exception=True))
+            # Otherwise it means that there is no transition with given name
+            raise TransitionNotAllowed(
+                f"Process class {self.__class__} has no transition with action name {action_name}"
+            )
+
+        # If there's a single condition that passes all criteria, execute it
+        transition = transitions[0]
+        logger.info(f"{self.state.instance_key}, process {self.process_name} "
+                    f"executes '{action_name}' transition from {self.state.cached_state} "
+                    f"to {transition.target}")
+        return transition.change_state(self.state, **kwargs)
+
+    def is_valid(self, user=None, raise_exception=False) -> bool:
         """
         It validates this process to meet conditions and pass permissions
         :param user: any object used to pass permissions
+        :param raise_exception: whether or not to raise an exception if some condition or permission fails
         :return: True or False
+        :raises: TransitionNotAllowed
         """
         permissions = self.permissions_class(commands=self.permissions)
         conditions = self.conditions_class(commands=self.conditions)
-        return (permissions.execute(self.state, user) and
-                conditions.execute(self.state))
+        return (permissions.execute(self.state, user, raise_exception=raise_exception) and
+                conditions.execute(self.state, raise_exception=raise_exception))
 
-    def get_available_transitions(self, user=None, action_name=None):
+    def get_available_transitions(self, user=None, action_name=None, check_valid=True, raise_exception=False):
         """
         It returns all available transition which meet conditions and pass permissions.
         Including nested processes.
@@ -98,12 +115,15 @@ class Process(object):
             if action_name is not None and transition.action_name != action_name:
                 continue
 
-            if self.state.cached_state in transition.sources and transition.is_valid(self.state, user):
+            is_valid = check_valid is False or transition.is_valid(self.state, user, raise_exception=raise_exception)
+            if self.state.cached_state in transition.sources and is_valid:
                 yield transition
 
         for sub_process_class in self.nested_processes:
             sub_process = sub_process_class(state=self.state)
-            yield from sub_process.get_available_transitions(user=user, action_name=action_name)
+            yield from sub_process.get_available_transitions(
+                user=user, action_name=action_name, check_valid=check_valid, raise_exception=raise_exception
+            )
 
 
 class ProcessManager:

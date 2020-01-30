@@ -1,6 +1,7 @@
 import logging
 
 from django_logic.state import State
+from django_logic.exceptions import TransitionNotAllowed
 
 
 class BaseCommand(object):
@@ -20,25 +21,52 @@ class BaseCommand(object):
 
 
 class Conditions(BaseCommand):
-    def execute(self, state: State, **kwargs):
+    def execute(self, state: State, raise_exception=False, **kwargs):
         """
         It checks every condition for the provided instance by executing every command
         :param state: State object
+        :param raise_exception: whether or not to raise an exception if some permissions fail
         :return: True or False
+        :raises: TransitionNotAllowed
         """
-        return all(command(state.instance, **kwargs) for command in self._commands)
+        valid = True
+        hints = []
+        for command in self._commands:
+            result = command(state.instance, **kwargs)
+            if not result:
+                valid = False
+                if hasattr(command, 'hint'):
+                    hints.append(command.hint)
+        if raise_exception and not valid:
+            raise TransitionNotAllowed(f"Conditions not met for action '{self._transition.action_name}'", hints=hints)
+        return valid
 
 
 class Permissions(BaseCommand):
-    def execute(self, state: State, user: any, **kwargs):
+    def execute(self, state: State, user: any, raise_exception=False, **kwargs):
         """
         It checks the permissions for the provided user and instance by executing evey command
         If user is None then permissions passed
         :param state: State object
         :param user: any or None
+        :param raise_exception: whether or not to raise an exception if some permissions fail
         :return: True or False
+        :raises: TransitionNotAllowed
         """
-        return user is None or all(command(state.instance,  user, **kwargs) for command in self._commands)
+        if user is None:
+            return True
+
+        valid = True
+        hints = []
+        for command in self._commands:
+            result = command(state.instance, user, **kwargs)
+            if not result:
+                valid = False
+                if hasattr(command, 'hint'):
+                    hints.append(command.hint)
+        if raise_exception and not valid:
+            raise TransitionNotAllowed(f"Permissions not met for action '{self._transition.action_name}'", hints=hints)
+        return valid
 
 
 class SideEffects(BaseCommand):

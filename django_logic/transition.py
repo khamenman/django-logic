@@ -36,16 +36,18 @@ class Transition(object):
     def __str__(self):
         return "Transition: {} to {}".format(self.action_name, self.target)
 
-    def is_valid(self, state: State, user=None) -> bool:
+    def is_valid(self, state: State, user=None, raise_exception=False) -> bool:
         """
         It validates this process to meet conditions and pass permissions
         :param state: State object
         :param user: any object used to pass permissions
+        :param raise_exception: whether or not to raise an exception if some condition or permission fails
         :return: True or False
+        :raises: TransitionNotAllowed
         """
         return (not state.is_locked() and
-                self.permissions.execute(state, user) and
-                self.conditions.execute(state))
+                self.permissions.execute(state, user, raise_exception=raise_exception) and
+                self.conditions.execute(state, raise_exception=raise_exception))
 
     def change_state(self, state: State, **kwargs):
         """

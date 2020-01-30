@@ -3,4 +3,6 @@ class DjangoLogicException(Exception):
 
 
 class TransitionNotAllowed(DjangoLogicException):
-    pass
+    def __init__(self, *args, hints=None):
+        super().__init__(*args)
+        self.hints = hints or []

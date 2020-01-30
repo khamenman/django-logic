@@ -14,10 +14,11 @@ class User:
 
 def allowed(instance, user):
     return user.is_allowed and not user.is_staff
-
+allowed.hint = "User is not allowed"
 
 def is_staff(instance, user):
     return user.is_staff
+is_staff.hint = "User is not staff"
 
 
 def disallow(instance, user):
@@ -26,11 +27,11 @@ def disallow(instance, user):
 
 def is_editable(instance):
     return not instance.customer_received
-
+is_editable.hint = "Invoice is not editable"
 
 def is_available(instance):
     return instance.is_available
-
+is_available.hint = "Invoice is not available"
 
 def not_available(instance):
     return False
@@ -700,6 +701,21 @@ class ApplyTransitionTestCase(TestCase):
         TestProcess('status', invoice).cancel()
         self.assertEqual(invoice.status, 'cancelled')
 
+    def test_failing_conditions(self):
+        class TestProcess(Process):
+            transitions = [
+                Transition('cancel', sources=['draft', ], target='cancelled', conditions=[is_editable, is_available]),
+            ]
+        invoice = Invoice.objects.create(status='draft', customer_received=True, is_available=False)
+
+        with self.assertRaises(TransitionNotAllowed) as ctx:
+            # not editable and not available
+            TestProcess('status', invoice).cancel()
+        self.assertEqual(invoice.status, 'draft')
+        exception = ctx.exception
+        self.assertEqual(str(exception), "Conditions not met for action 'cancel'")
+        self.assertEqual(exception.hints, ["Invoice is not editable", "Invoice is not available"])
+
     def test_same_action_name_with_several_permissions(self):
         class TestProcess(Process):
             transitions = [
@@ -722,3 +738,18 @@ class ApplyTransitionTestCase(TestCase):
         invoice = Invoice.objects.create(status='draft')
         TestProcess('status', invoice).cancel(user=staff)
         self.assertEqual(invoice.status, 'cancelled')
+
+    def test_failing_permissions(self):
+        class TestProcess(Process):
+            transitions = [
+                Transition('cancel', sources=['draft', ], target='cancelled', permissions=[is_staff, allowed]),
+            ]
+
+        user = User(is_allowed=False, is_staff=False)
+        invoice = Invoice.objects.create(status='draft')
+        with self.assertRaises(TransitionNotAllowed) as ctx:
+            TestProcess('status', invoice).cancel(user=user)
+        exception = ctx.exception
+        self.assertEqual(str(exception), "Permissions not met for action 'cancel'")
+        self.assertEqual(exception.hints, ["User is not staff", "User is not allowed"])
+
